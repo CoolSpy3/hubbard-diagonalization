@@ -262,6 +262,7 @@ if "U_inc" in resource_data:
 
 	inc_job_params = {
 		'job_name': f'NLCE_{job_name}_inc',
+		'script_name': job_name,
 		'log_file': f'{NLCE_HOME}/logs/{job_name}_inc_%j.out',
 		'output_group': output_group,
 		'output_name_base': job_name,  # Output directories all start with the job name
