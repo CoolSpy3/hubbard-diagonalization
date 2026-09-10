@@ -80,7 +80,7 @@ function count_double_occupancies(state::Vector{Int}, num_colors::Int)::Int
     total = 0
     # Consider two colors at a time to interact
     for color_pair in enumerate_states(num_colors, 2)
-        # Get indicies of the colors
+        # Get indices of the colors
         first_color = trailing_zeros(color_pair)
         second_color = trailing_zeros(color_pair ⊻ (1 << first_color))  # leading_zeros would depend on the bit-width, so we can't use it
         # Correct for 1-based indexing
@@ -381,12 +381,23 @@ function diagonalize_and_compute_observables(
         # as long as we're consistent, the matrix elements will be in the right place
         # state_i and state_j are arrays of integers, where each integer is a bitmask
         # representing the occupation of each site for a given color
-        @threads :greedy for (i, state_i) in collect(
-            enumerate(enumerate_multistate(num_sites, color_configuration)),
-        )
+
+        # Precompute the computational basis states for this block so we can use them in both loops
+        # without recomputing them. We kinda have to collect these anyways for the threads call,
+        # so we might as well only compute them once.
+        computational_basis_states = collect(enumerate_multistate(num_sites, color_configuration))
+        @assert length(computational_basis_states) == L
+
+        # Iterate over the basis states. We can't use enumerate because it doesn't play nicely
+        # with threads
+        @threads :greedy for i in 1:L
+            state_i = computational_basis_states[i]
+
             # Note: We're going to cut this inner loop off early since the matrix is symmetric
-            for (j, state_j) in
-                enumerate(enumerate_multistate(num_sites, color_configuration))
+            # We don't need to avoid enumerate here, but on my machine iterating over a range
+            # directly and indexing leads to a 2s speedup in test_grids.
+            for j in 1:L
+                state_j = computational_basis_states[j]
                 @debug begin
                     "Computing H[$i,$j] between states:\n  state_i=$(digits.(state_i, base=2, pad=num_sites))\n  state_j=$(digits.(state_j, base=2, pad=num_sites))"
                 end
@@ -512,13 +523,17 @@ function diagonalize_and_compute_observables(
 
         # Compute and store observables for each eigen-state
         offset = size_offset[config_idx]
-        @threads for (i, (eigen_val, eigen_vec)) in
-                     collect(enumerate(zip(eigen_data.values, eachcol(eigen_data.vectors))))
+
+        # Iterate over a range rather than using a fancy collect call
+        # to save memory
+        @threads for i in 1:L
             @debug begin
                 "  eigen_val=$eigen_val, eigen_vec=$eigen_vec"
             end
 
             idx = offset + i
+            eigen_val = eigen_data.values[i]
+            eigen_vec = @view eigen_data.vectors[:, i]
 
             # eigen() returns normalized eigenvectors, so we don't need to do any normalization here
 
@@ -584,9 +599,9 @@ function diagonalize_and_compute_observables(
 
     # Create a new container to store the observable values at each u
     computed_observable_values = create_observable_data_map(nothing, num_temps, num_us)
-    @threads for (i, u) in collect(enumerate(u_vals))
+    @threads for i in eachindex(u_vals)
         # Shift observables so that density=N/2 at u=0
-        u_shifted = u + u_shift
+        u_shifted = u_vals[i] + u_shift
 
         # Re-weight the data according to the new u value
         # To explain the negatives: The partition function terms are of the form e^(-B * E),
@@ -605,7 +620,7 @@ function diagonalize_and_compute_observables(
         Z = sum(corrected_weights, dims = 1)
 
         @debug begin
-            "u=$u, corrected_weights=$corrected_weights, Z=$Z"
+            "u_shifted=$u_shifted, corrected_weights=$corrected_weights, Z=$Z"
         end
 
         # The intrinsic energy is also used a lot of these, so just precompute it here.
